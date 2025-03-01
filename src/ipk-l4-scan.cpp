@@ -27,12 +27,29 @@ std::vector<int> parsePortRanges(const std::string& ports) {
     std::vector<int> portList;
     size_t start = 0, end;
     
-    // Loop through the string and extract port numbers
-    while ((end = ports.find(',', start)) != std::string::npos) {
-        portList.push_back(std::stoi(ports.substr(start, end - start))); // Convert substring to integer
+    while (start < ports.length()) {
+        end = ports.find(',', start);
+        std::string part = ports.substr(start, end - start);
+
+        // Check if the part contains a range (e.g., "1-65535")
+        size_t dash = part.find('-');
+        if (dash != std::string::npos) {
+            int range_start = std::stoi(part.substr(0, dash));
+            int range_end = std::stoi(part.substr(dash + 1));
+
+            // Ensure valid range and add all ports
+            if (range_start <= range_end) {
+                for (int p = range_start; p <= range_end; ++p) {
+                    portList.push_back(p);
+                }
+            }
+        } else {
+            portList.push_back(std::stoi(part)); // Single port
+        }
+
+        if (end == std::string::npos) break;
         start = end + 1;
     }
-    portList.push_back(std::stoi(ports.substr(start))); // Add the last port number
 
     return portList;
 }
@@ -70,23 +87,22 @@ int main(int argc, char* argv[]) {
                 return 1;
         }
     }
-    
-    // Ensure a target is specified
+
     if (optind < argc) {
-        config.target = argv[optind]; // Get the target (IP or domain)
+        config.target = argv[optind];
     } else {
         std::cerr << "Error: No target specified!" << std::endl;
         printUsage(argv[0]);
         return 1;
     }
-    
-    // Debug output to show parsed configuration
+
+    // Debug output
     std::cout << "Scanning target: " << config.target << " on interface: " << config.interface << std::endl;
     std::cout << "TCP Ports: ";
     for (int port : config.tcp_ports) std::cout << port << " ";
     std::cout << "\nUDP Ports: ";
-    for (int port : config.udp_ports) std::cout << port << " "; // Now correctly stores UDP ports
+    for (int port : config.udp_ports) std::cout << port << " ";
     std::cout << "\nTimeout: " << config.timeout << "ms" << std::endl;
-    
+
     return 0;
 }
