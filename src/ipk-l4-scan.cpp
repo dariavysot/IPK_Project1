@@ -2,18 +2,18 @@
 #include <getopt.h>
 #include <string>
 #include <vector>
+#include <set>
+#include <ifaddrs.h>
+#include <net/if.h>
 
-
-// Structure to hold scan configuration settings
 struct ScanConfig {
-    std::string interface;      // Network interface to use
-    std::vector<int> tcp_ports; // List of TCP ports to scan
-    std::vector<int> udp_ports; // List of UDP ports to scan (not used in parsing)
-    int timeout = 5000;         // Timeout in milliseconds (default: 5000ms)
-    std::string target;         // Target domain or IP address
+    std::string interface;
+    std::vector<int> tcp_ports;
+    std::vector<int> udp_ports;
+    int timeout = 5000;
+    std::string target;
 };
 
-// Function to print the usage information for the program
 void printUsage(const char* progName) {
     std::cout << "Usage: " << progName 
               << " [-i interface | --interface interface] "
@@ -22,81 +22,143 @@ void printUsage(const char* progName) {
               << std::endl;
 }
 
-// Function to parse a comma-separated list of port numbers into a vector
+void listInterfaces() {
+    struct ifaddrs *ifap, *ifa;
+    if (getifaddrs(&ifap) == 0) {
+        std::set<std::string> interfaces;
+        for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
+            if (ifa->ifa_addr && (ifa->ifa_flags & IFF_UP)) {
+                interfaces.insert(ifa->ifa_name);
+            }
+        }
+        std::cout << "Available network interfaces:\n";
+        for (const auto& iface : interfaces) {
+            std::cout << "  " << iface << std::endl;
+        }
+        freeifaddrs(ifap);
+    } else {
+        std::cerr << "Error retrieving network interfaces." << std::endl;
+    }
+}
+
 std::vector<int> parsePortRanges(const std::string& ports) {
     std::vector<int> portList;
     size_t start = 0, end;
-    
     while (start < ports.length()) {
         end = ports.find(',', start);
         std::string part = ports.substr(start, end - start);
-
-        // Check if the part contains a range (e.g., "1-65535")
         size_t dash = part.find('-');
-        if (dash != std::string::npos) {
-            int range_start = std::stoi(part.substr(0, dash));
-            int range_end = std::stoi(part.substr(dash + 1));
-
-            // Ensure valid range and add all ports
-            if (range_start <= range_end) {
+        try {
+            if (dash != std::string::npos) { 
+                int range_start = std::stoi(part.substr(0, dash));
+                int range_end = std::stoi(part.substr(dash + 1));
+                if (range_start > range_end || range_start < 1 || range_end > 65535) {
+                    throw std::out_of_range("Invalid port range");
+                }
                 for (int p = range_start; p <= range_end; ++p) {
                     portList.push_back(p);
                 }
+            } else {
+                int port = std::stoi(part);
+                if (port < 1 || port > 65535) {
+                    throw std::out_of_range("Invalid port number");
+                }
+                portList.push_back(port);
             }
-        } else {
-            portList.push_back(std::stoi(part)); // Single port
+        } catch (...) {
+            std::cerr << "Error: Invalid port input '" << part << "'. Use format: 22,80,1000-2000." << std::endl;
+            exit(1);
         }
-
         if (end == std::string::npos) break;
         start = end + 1;
     }
-
     return portList;
 }
 
 int main(int argc, char* argv[]) {
-    ScanConfig config; // Configuration structure to store user input
-
-    // Define long options for command-line arguments
+    ScanConfig config;
+    bool ports_specified = false;
+    bool interface_provided = false;
+    
     static struct option long_options[] = {
-        {"interface", required_argument, 0, 'i'}, // Network interface
-        {"pt", required_argument, 0, 't'},       // TCP ports
-        {"pu", required_argument, 0, 'u'},       // UDP ports
-        {"wait", required_argument, 0, 'w'},     // Timeout
-        {0, 0, 0, 0}                             // End of options
+        {"interface", required_argument, 0, 'i'},
+        {"pt", required_argument, 0, 't'},
+        {"pu", required_argument, 0, 'u'},
+        {"wait", required_argument, 0, 'w'},
+        {0, 0, 0, 0}
     };
 
     int opt;
-    // Parse command-line arguments using getopt_long
-    while ((opt = getopt_long(argc, argv, "i:t:u:w:", long_options, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "i::t:u:w:", long_options, nullptr)) != -1) {
+        std::cout << "DEBUG: Processing option '" << (char)opt << "' with value: " 
+                  << (optarg ? optarg : "NULL") << std::endl;
         switch (opt) {
-            case 'i': // Set network interface
-                config.interface = optarg;
-                break;
-            case 't': // Set TCP ports
+            case 'i':
+            interface_provided = true;
+            if (optarg == nullptr && optind < argc && argv[optind][0] != '-') {
+                optarg = argv[optind++];
+            }
+
+            if (optarg == nullptr) {
+                std::cout << "No interface specified, listing available interfaces." << std::endl;
+                listInterfaces();
+                return 0;
+            }
+
+            config.interface = std::string(optarg);
+            std::cout << "Interface provided: " << config.interface << std::endl;
+            break;
+            case 't':
                 config.tcp_ports = parsePortRanges(optarg);
+                ports_specified = true;
                 break;
-            case 'u': // Set UDP ports
+            case 'u':
                 config.udp_ports = parsePortRanges(optarg);
+                ports_specified = true;
                 break;
-            case 'w': // Set timeout
+            case 'w':
+                if (!optarg) {
+                    std::cerr << "Error: -w requires a timeout value." << std::endl;
+                    return 1;
+                }
                 config.timeout = std::stoi(optarg);
                 break;
-            default: // Invalid argument, show usage
+            default:
                 printUsage(argv[0]);
                 return 1;
         }
     }
-
+    
+    if (argc == 1) {
+        listInterfaces();
+        return 0;
+    }
+   
+    if (!interface_provided) {
+        std::cerr << "Error: No interface specified!" << std::endl;
+        return 1;
+    }
+    
     if (optind < argc) {
         config.target = argv[optind];
-    } else {
+    }
+    
+    if (config.target.empty()) {
         std::cerr << "Error: No target specified!" << std::endl;
         printUsage(argv[0]);
         return 1;
     }
-
-    // Debug output
+    
+    if (!ports_specified) {
+        std::cerr << "Error: No ports specified!" << std::endl;
+        return 1;
+    }
+    
+    if (argc - optind > 1) {
+        std::cerr << "Error: Too many targets specified!" << std::endl;
+        return 1;
+    }
+    
     std::cout << "Scanning target: " << config.target << " on interface: " << config.interface << std::endl;
     std::cout << "TCP Ports: ";
     for (int port : config.tcp_ports) std::cout << port << " ";
