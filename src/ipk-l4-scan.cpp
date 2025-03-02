@@ -90,8 +90,6 @@ int main(int argc, char* argv[]) {
 
     int opt;
     while ((opt = getopt_long(argc, argv, "i::t:u:w:", long_options, nullptr)) != -1) {
-        std::cout << "DEBUG: Processing option '" << (char)opt << "' with value: " 
-                  << (optarg ? optarg : "NULL") << std::endl;
         switch (opt) {
             case 'i':
             interface_provided = true;
@@ -121,7 +119,16 @@ int main(int argc, char* argv[]) {
                     std::cerr << "Error: -w requires a timeout value." << std::endl;
                     return 1;
                 }
-                config.timeout = std::stoi(optarg);
+                try {
+                    config.timeout = std::stoi(optarg);
+                    if (config.timeout <= 0) {
+                        throw std::out_of_range("Timeout must be a positive integer");
+                    }
+                } catch (const std::exception& e) {
+                    std::cerr << "Error: Invalid timeout value '" << optarg << "'. It must be a positive integer." << std::endl;
+                    return 1;
+                }
+                std::cout << "Timeout set to: " << config.timeout << " ms" << std::endl;
                 break;
             default:
                 printUsage(argv[0]);
