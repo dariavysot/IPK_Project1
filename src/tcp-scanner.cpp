@@ -50,6 +50,49 @@ void sendSynPacket(int sock, const ScanConfig &config, int port) {
     }
 }
 
+std::string receiveResponse(int sock, const ScanConfig &config) {
+    char buffer[1024];
+    struct sockaddr_in sender;
+    socklen_t sender_len = sizeof(sender);
+
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(sock, &readfds);
+
+    struct timeval timeout;
+    timeout.tv_sec = config.timeout / 1000;
+    timeout.tv_usec = (config.timeout % 1000) * 1000;
+
+    int retval = select(sock + 1, &readfds, NULL, NULL, &timeout);
+    if (retval == -1) {
+        perror("Error in select()");
+        return "error";
+    } else if (retval == 0) {
+        return "filtered"; 
+    }
+
+    int recv_bytes = recvfrom(sock, buffer, sizeof(buffer), 0, (struct sockaddr *)&sender, &sender_len);
+    if (recv_bytes < 0) {
+        perror("Error receiving packet");
+        return "error";
+    }
+
+    struct ip *iph = (struct ip *)buffer;
+    struct tcphdr *tcph = (struct tcphdr *)(buffer + iph->ip_hl * 4);
+
+    std::cout << "Received packet from " << inet_ntoa(sender.sin_addr) << std::endl;
+    std::cout << "TCP Flags: " << (int)tcph->th_flags << std::endl;
+
+    if (ntohs(tcph->th_dport) == 12345) { 
+        if (tcph->th_flags & TH_SYN && tcph->th_flags & TH_ACK) {
+            return "open";
+        } else if (tcph->th_flags & TH_RST) {
+            return "closed"; 
+        }
+    }
+    return "filtered"; 
+}
+
 void scanTcpPorts(const ScanConfig &config) {
     int sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
     if (sock < 0) {
@@ -57,8 +100,12 @@ void scanTcpPorts(const ScanConfig &config) {
         return;
     }
 
+    std::cout << "PORT STATE\n";
+
     for (int port : config.tcp_ports) {
         sendSynPacket(sock, config, port);
+        std::string result = receiveResponse(sock, config);
+        std::cout << port << "/tcp " << result << std::endl;
         usleep(config.timeout * 1000);
     }
 

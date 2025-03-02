@@ -4,7 +4,6 @@
 #include <vector>
 #include <string>
 
-// Структура конфігурації (використовується у main і tcp_scanner)
 struct ScanConfig {
     std::string interface;
     std::vector<int> tcp_ports;
@@ -13,7 +12,6 @@ struct ScanConfig {
     std::string target;
 };
 
-// Функція для запуску TCP-сканування
 void scanTcpPorts(const ScanConfig &config);
 
 #endif
