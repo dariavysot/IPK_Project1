@@ -13,6 +13,14 @@ void printUsage(const char* progName) {
               << "[--pu port-ranges | --pt port-ranges | -u port-ranges | -t port-ranges] "
               << "{-w timeout} [domain-name | ip-address]" 
               << std::endl;
+    std::cout << "\nOptions:\n"
+              << "  -i, --interface <interface>   Specify network interface\n"
+              << "  -t, --pt <ports>             Specify TCP ports to scan (e.g., 22,80,443,1000-2000)\n"
+              << "  -u, --pu <ports>             Specify UDP ports to scan\n"
+              << "  -w <timeout>                 Timeout in milliseconds (default: 5000ms)\n"
+              << "  -h, --help                   Show this help message\n"
+              << "\nExample:\n"
+              << "  " << progName << " -i eth0 -t 22,80,443 192.168.1.1\n";
 }
 
 void listInterfaces() {
@@ -78,27 +86,31 @@ int main(int argc, char* argv[]) {
         {"pt", required_argument, 0, 't'},
         {"pu", required_argument, 0, 'u'},
         {"wait", required_argument, 0, 'w'},
+        {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "i::t:u:w:", long_options, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "i::t:u:w:h", long_options, nullptr)) != -1) {
         switch (opt) {
-            case 'i':
-            interface_provided = true;
-            if (optarg == nullptr && optind < argc && argv[optind][0] != '-') {
-                optarg = argv[optind++];
-            }
-
-            if (optarg == nullptr) {
-                std::cout << "No interface specified, listing available interfaces." << std::endl;
-                listInterfaces();
+            case 'h':
+                printUsage(argv[0]);
                 return 0;
-            }
+            case 'i':
+                interface_provided = true;
+                if (optarg == nullptr && optind < argc && argv[optind][0] != '-') {
+                    optarg = argv[optind++];
+                }
 
-            config.interface = std::string(optarg);
-            std::cout << "Interface provided: " << config.interface << std::endl;
-            break;
+                if (optarg == nullptr) {
+                    std::cout << "No interface specified, listing available interfaces." << std::endl;
+                    listInterfaces();
+                    return 0;
+                }
+
+                config.interface = std::string(optarg);
+                std::cout << "Interface provided: " << config.interface << std::endl;
+                break;
             case 't':
                 config.tcp_ports = parsePortRanges(optarg);
                 ports_specified = true;
