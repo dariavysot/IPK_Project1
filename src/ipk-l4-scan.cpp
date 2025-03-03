@@ -5,14 +5,7 @@
 #include <set>
 #include <ifaddrs.h>
 #include <net/if.h>
-
-struct ScanConfig {
-    std::string interface;
-    std::vector<int> tcp_ports;
-    std::vector<int> udp_ports;
-    int timeout = 5000;
-    std::string target;
-};
+#include "ipk-l4-scan.h"
 
 void printUsage(const char* progName) {
     std::cout << "Usage: " << progName 
@@ -172,6 +165,10 @@ int main(int argc, char* argv[]) {
     std::cout << "\nUDP Ports: ";
     for (int port : config.udp_ports) std::cout << port << " ";
     std::cout << "\nTimeout: " << config.timeout << "ms" << std::endl;
+
+    if (!config.tcp_ports.empty()) {
+        scanTcpPorts(config);
+    }
 
     return 0;
 }
