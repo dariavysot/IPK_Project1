@@ -4,9 +4,22 @@
 #include <sys/socket.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
+#include <netinet/ip_icmp.h> 
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <net/if.h>
+#include <pcap.h>
+#include <netinet/if_ether.h>  // ether_header та ETHERTYPE_IP
+#include <netinet/in.h>
+
+//#include <cstdlib>
+
+struct pseudo_header {
+    u_int32_t src;
+    u_int32_t dst;
+    u_int8_t reserved;
+    u_int8_t protocol;
+    u_int16_t length;
+};
 
 unsigned short checksum(void *b, int len) {
     unsigned short *buf = (unsigned short *)b;
@@ -34,63 +47,87 @@ void sendSynPacket(int sock, const ScanConfig &config, int port) {
     iph->ip_v = 4;
     iph->ip_ttl = 64;
     iph->ip_p = IPPROTO_TCP;
-    inet_pton(AF_INET, "0.0.0.0", &iph->ip_src);
+    iph->ip_src.s_addr = inet_addr(config.target.c_str());
     iph->ip_dst = target.sin_addr;
-    iph->ip_sum = checksum((unsigned short *)packet, sizeof(struct ip));
+    iph->ip_sum = 0;
+    iph->ip_sum = checksum((unsigned short *)iph, sizeof(struct ip));
 
-    tcph->th_sport = htons(12345);
+    //srand(time(NULL)); 
+    //int source_port = 1024 + (rand() % 64511); 
+
+    //tcph->th_sport = htons(source_port);
     tcph->th_dport = htons(port);
     tcph->th_flags = TH_SYN;
-    tcph->th_sum = checksum((unsigned short *)tcph, sizeof(struct tcphdr));
+    tcph->th_off = 5;
+    tcph->th_sum = 0;
+
+    struct pseudo_header psh;
+    psh.src = iph->ip_src.s_addr;
+    psh.dst = iph->ip_dst.s_addr;
+    psh.reserved = 0;
+    psh.protocol = IPPROTO_TCP;
+    psh.length = htons(sizeof(struct tcphdr));
+
+    char pseudo_packet[sizeof(struct pseudo_header) + sizeof(struct tcphdr)];
+    memcpy(pseudo_packet, &psh, sizeof(struct pseudo_header));
+    memcpy(pseudo_packet + sizeof(struct pseudo_header), tcph, sizeof(struct tcphdr));
+
+    tcph->th_sum = checksum((unsigned short *)pseudo_packet, sizeof(pseudo_packet));
 
     if (sendto(sock, packet, sizeof(packet), 0, (struct sockaddr *)&target, sizeof(target)) < 0) {
         perror("Error sending SYN packet");
     } else {
-        std::cout << "Sent SYN to port " << port << std::endl;
+        std::cout << "Sent SYN to port " << port << " from " << config.target << std::endl;
+                 // << " with source port " << source_port 
     }
 }
 
-std::string receiveResponse(int sock, const ScanConfig &config) {
-    char buffer[1024];
-    struct sockaddr_in sender;
-    socklen_t sender_len = sizeof(sender);
-
-    fd_set readfds;
-    FD_ZERO(&readfds);
-    FD_SET(sock, &readfds);
-
-    struct timeval timeout;
-    timeout.tv_sec = config.timeout / 1000;
-    timeout.tv_usec = (config.timeout % 1000) * 1000;
-
-    int retval = select(sock + 1, &readfds, NULL, NULL, &timeout);
-    if (retval == -1) {
-        perror("Error in select()");
-        return "error";
-    } else if (retval == 0) {
-        return "filtered"; 
-    }
-
-    int recv_bytes = recvfrom(sock, buffer, sizeof(buffer), 0, (struct sockaddr *)&sender, &sender_len);
-    if (recv_bytes < 0) {
-        perror("Error receiving packet");
+std::string receiveResponse(const ScanConfig &config, int /*target_port*/) { 
+    char errbuf[PCAP_ERRBUF_SIZE];
+    pcap_t *handle = pcap_open_live(config.interface.c_str(), BUFSIZ, 1, 1000, errbuf);
+    if (handle == NULL) {
+        std::cerr << "Error opening pcap device: " << errbuf << std::endl;
         return "error";
     }
 
-    struct ip *iph = (struct ip *)buffer;
-    struct tcphdr *tcph = (struct tcphdr *)(buffer + iph->ip_hl * 4);
+    struct pcap_pkthdr header;
+    const u_char *packet;
 
-    std::cout << "Received packet from " << inet_ntoa(sender.sin_addr) << std::endl;
-    std::cout << "TCP Flags: " << (int)tcph->th_flags << std::endl;
+    while ((packet = pcap_next(handle, &header)) != NULL) {
+        struct ether_header *eth_header = (struct ether_header *)packet;
+        if (ntohs(eth_header->ether_type) == ETHERTYPE_IP) {
+            struct ip *ip_header = (struct ip *)(packet + sizeof(struct ether_header));
+            if (ip_header->ip_p == IPPROTO_TCP) {
+                struct tcphdr *tcp_header = (struct tcphdr *)(packet + sizeof(struct ether_header) + (ip_header->ip_hl * 4));
 
-    if (ntohs(tcph->th_dport) == 12345) { 
-        if (tcph->th_flags & TH_SYN && tcph->th_flags & TH_ACK) {
-            return "open";
-        } else if (tcph->th_flags & TH_RST) {
-            return "closed"; 
+                // Make sure it's not just an ACK
+                if ((tcp_header->th_flags & TH_ACK) && !(tcp_header->th_flags & TH_SYN) && !(tcp_header->th_flags & TH_RST)) {
+                    continue;  // Skip clean ACKs
+                }
+
+                // If SYN-ACK → port is open
+                if ((tcp_header->th_flags & TH_SYN)) {
+                    return "open";
+                }
+
+                // If RST → port is closed
+                if (tcp_header->th_flags & TH_RST) {
+                    return "closed";
+                }
+
+                if (ip_header->ip_p == IPPROTO_ICMP) {
+                    struct icmp *icmp_header = (struct icmp *)(packet + sizeof(struct ether_header) + (ip_header->ip_hl * 4));
+                    
+                    if (icmp_header->icmp_type == 3 && icmp_header->icmp_code == 3) {
+                        return "filtered"; // ICMP Destination Unreachable (Port Unreachable) 3
+                    }
+                }
+            }
         }
     }
-    return "filtered"; 
+
+    pcap_close(handle);
+    return "filtered";  // If there is no response
 }
 
 void scanTcpPorts(const ScanConfig &config) {
@@ -104,7 +141,7 @@ void scanTcpPorts(const ScanConfig &config) {
 
     for (int port : config.tcp_ports) {
         sendSynPacket(sock, config, port);
-        std::string result = receiveResponse(sock, config);
+        std::string result = receiveResponse(config, port);
         std::cout << port << "/tcp " << result << std::endl;
         usleep(config.timeout * 1000);
     }
