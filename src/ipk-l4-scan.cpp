@@ -210,14 +210,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    //std::cout << "Scanning target: " << resolvedIP << " on interface: " << config.interface << std::endl;
+    std::cout << "Scanning target: " << config.target << " (" << resolvedIP << ", " << (use_ipv6 ? "IPv6" : "IPv4") << ") on interface: " << config.interface << std::endl;
     std::cout << "TCP Ports: ";
     for (int port : config.tcp_ports) std::cout << port << " ";
     std::cout << "\nUDP Ports: ";
     for (int port : config.udp_ports) std::cout << port << " ";
     std::cout << "\nTimeout: " << config.timeout << "ms" << std::endl;
 
-    std::cout << "Scanning target: " << config.target << " (" << resolvedIP << ", " << (use_ipv6 ? "IPv6" : "IPv4") << ") on interface: " << config.interface << std::endl;
     if (!config.tcp_ports.empty()) {
         scanTcpPorts(config, resolvedIP, use_ipv6);
     }

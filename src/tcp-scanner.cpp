@@ -9,7 +9,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <pcap.h>
-#include <netinet/if_ether.h>  // ether_header та ETHERTYPE_IP
+#include <netinet/if_ether.h>
 #include <netinet/in.h>
 #include <chrono>
 #include <sys/time.h>
@@ -53,7 +53,7 @@ void sendSynPacket(int sock, const ScanConfig &config, const std::string &resolv
         ip6h->ip6_plen = htons(sizeof(struct tcphdr));
         ip6h->ip6_nxt = IPPROTO_TCP;
         ip6h->ip6_hlim = 64;
-        inet_pton(AF_INET6, "::1", &ip6h->ip6_src); // Використовуємо loopback для тесту
+        inet_pton(AF_INET6, "::1", &ip6h->ip6_src);
         inet_pton(AF_INET6, resolvedIP.c_str(), &ip6h->ip6_dst);
 
         tcph->th_dport = htons(port);
@@ -93,9 +93,9 @@ void sendSynPacket(int sock, const ScanConfig &config, const std::string &resolv
 
         if (sendto(sock, packet, sizeof(packet), 0, (struct sockaddr *)&target, sizeof(target)) < 0) {
             perror("Error sending SYN packet (IPv4)");
-        } else {
-            std::cout << "Sent SYN to port " << port << " on target " << resolvedIP << " (IPv4)" << std::endl;
-        }
+        } //else {
+           // std::cout << "Sent SYN to port " << port << " on target " << resolvedIP << " (IPv4)" << std::endl;
+        //}
     }
 }
 
@@ -185,7 +185,7 @@ void scanTcpPorts(const ScanConfig &config, const std::string &resolvedIP, bool 
         sendSynPacket(sock, config, resolvedIP, use_ipv6, port);
         std::string result = receiveResponse(config, port);
         std::cout << port << "/tcp " << result << std::endl;
-        usleep(config.timeout * 1000);
+        //usleep(config.timeout * 1000);
     }
 
     close(sock);
