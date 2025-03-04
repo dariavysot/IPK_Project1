@@ -5,6 +5,7 @@
 #include <set>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <arpa/inet.h>
 #include "ipk-l4-scan.h"
 
 void printUsage(const char* progName) {
@@ -40,6 +41,11 @@ void listInterfaces() {
     } else {
         std::cerr << "Error retrieving network interfaces." << std::endl;
     }
+}
+
+bool isIPv6(const std::string &address) {
+    struct in6_addr ipv6;
+    return inet_pton(AF_INET6, address.c_str(), &ipv6) == 1;
 }
 
 std::vector<int> parsePortRanges(const std::string& ports) {
@@ -160,6 +166,9 @@ int main(int argc, char* argv[]) {
         printUsage(argv[0]);
         return 1;
     }
+
+    bool use_ipv6 = isIPv6(config.target);
+    std::cout << "Using " << (use_ipv6 ? "IPv6" : "IPv4") << " for scanning.\n";
     
     if (!ports_specified) {
         std::cerr << "Error: No ports specified!" << std::endl;
