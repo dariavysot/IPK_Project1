@@ -11,6 +11,9 @@
 #include <pcap.h>
 #include <netinet/if_ether.h>  // ether_header та ETHERTYPE_IP
 #include <netinet/in.h>
+#include <chrono>
+#include <sys/time.h>
+#include <sys/select.h>
 
 //#include <cstdlib>
 
@@ -98,43 +101,68 @@ void sendSynPacket(int sock, const ScanConfig &config, const std::string &resolv
 
 std::string receiveResponse(const ScanConfig &config, int /*target_port*/) { 
     char errbuf[PCAP_ERRBUF_SIZE];
-    pcap_t *handle = pcap_open_live(config.interface.c_str(), BUFSIZ, 1, 1000, errbuf);
+    pcap_t *handle = pcap_open_live(config.interface.c_str(), BUFSIZ, 1, config.timeout, errbuf);
     if (handle == NULL) {
         std::cerr << "Error opening pcap device: " << errbuf << std::endl;
         return "error";
     }
 
-    struct pcap_pkthdr header;
+    struct pcap_pkthdr *header;
     const u_char *packet;
+    int res;
 
-    while ((packet = pcap_next(handle, &header)) != NULL) {
+    //auto start_time = std::chrono::high_resolution_clock::now();
+
+    int pcap_fd = pcap_get_selectable_fd(handle);
+    fd_set fds;
+    struct timeval timeout;
+    timeout.tv_sec = config.timeout / 1000;
+    timeout.tv_usec = (config.timeout % 1000) * 1000;
+
+    FD_ZERO(&fds);
+    FD_SET(pcap_fd, &fds);
+
+    while (true) {
+        int ret = select(pcap_fd + 1, &fds, NULL, NULL, &timeout);
+
+        if (ret == 0) { 
+            //std::cout << "Timeout reached for port " << target_port << " (" << config.timeout << " ms)\n";
+            pcap_close(handle);
+            return "filtered";
+        }
+        if (ret == -1) {  
+            perror("select() error");
+            pcap_close(handle);
+            return "error";
+        }
+
+        res = pcap_next_ex(handle, &header, &packet);
+        if (res == 0) continue; 
+        if (res == -1 || res == -2) break;
+
         struct ether_header *eth_header = (struct ether_header *)packet;
         if (ntohs(eth_header->ether_type) == ETHERTYPE_IP) {
             struct ip *ip_header = (struct ip *)(packet + sizeof(struct ether_header));
             if (ip_header->ip_p == IPPROTO_TCP) {
                 struct tcphdr *tcp_header = (struct tcphdr *)(packet + sizeof(struct ether_header) + (ip_header->ip_hl * 4));
 
-                // Make sure it's not just an ACK
                 if ((tcp_header->th_flags & TH_ACK) && !(tcp_header->th_flags & TH_SYN) && !(tcp_header->th_flags & TH_RST)) {
-                    continue;  // Skip clean ACKs
+                    continue;
                 }
 
-                // If SYN-ACK → port is open
+                //auto end_time = std::chrono::high_resolution_clock::now();
+                //double response_time = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+
                 if ((tcp_header->th_flags & TH_SYN)) {
+                    pcap_close(handle);
+                    //std::cout << "          Response time for port " << target_port << ": " << response_time << " ms\n";
                     return "open";
                 }
 
-                // If RST → port is closed
                 if (tcp_header->th_flags & TH_RST) {
+                    pcap_close(handle);
+                    //std::cout << "              Response time for port " << target_port << ": " << response_time << " ms\n";
                     return "closed";
-                }
-
-                if (ip_header->ip_p == IPPROTO_ICMP) {
-                    struct icmp *icmp_header = (struct icmp *)(packet + sizeof(struct ether_header) + (ip_header->ip_hl * 4));
-                    
-                    if (icmp_header->icmp_type == 3 && icmp_header->icmp_code == 3) {
-                        return "filtered"; // ICMP Destination Unreachable (Port Unreachable) 3
-                    }
                 }
             }
         }
