@@ -12,6 +12,7 @@ struct ScanConfig {
     std::string target;
 };
 
-void scanTcpPorts(const ScanConfig &config);
+std::vector<int> parsePortRanges(const std::string& ports);
+void scanTcpPorts(const ScanConfig &config, const std::string &resolvedIP, bool use_ipv6);
 
 #endif
