@@ -4,6 +4,7 @@
 #include <vector>
 #include <set>
 #include <ifaddrs.h>
+#include <netdb.h>
 #include <net/if.h>
 #include <arpa/inet.h>
 #include "ipk-l4-scan.h"
@@ -46,6 +47,32 @@ void listInterfaces() {
 bool isIPv6(const std::string &address) {
     struct in6_addr ipv6;
     return inet_pton(AF_INET6, address.c_str(), &ipv6) == 1;
+}
+
+bool resolveHostname(const std::string &hostname, std::string &resolvedIP, bool &is_ipv6) {
+    struct addrinfo hints{}, *res;
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    if (getaddrinfo(hostname.c_str(), nullptr, &hints, &res) != 0) {
+        std::cerr << "Error: Unable to resolve hostname: " << hostname << std::endl;
+        return false;
+    }
+
+    char ipStr[INET6_ADDRSTRLEN];
+    if (res->ai_family == AF_INET) {
+        struct sockaddr_in *ipv4 = (struct sockaddr_in *)res->ai_addr;
+        inet_ntop(AF_INET, &(ipv4->sin_addr), ipStr, sizeof(ipStr));
+        is_ipv6 = false;
+    } else if (res->ai_family == AF_INET6) {
+        struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)res->ai_addr;
+        inet_ntop(AF_INET6, &(ipv6->sin6_addr), ipStr, sizeof(ipStr));
+        is_ipv6 = true;
+    }
+
+    resolvedIP = std::string(ipStr);
+    freeaddrinfo(res);
+    return true;
 }
 
 std::vector<int> parsePortRanges(const std::string& ports) {
@@ -146,12 +173,13 @@ int main(int argc, char* argv[]) {
                 return 1;
         }
     }
-    
+
     if (argc == 1) {
-        listInterfaces();
-        return 0;
+        std::cerr << "Error: No arguments provided!" << std::endl;
+        printUsage(argv[0]);
+        return 1;
     }
-   
+    
     if (!interface_provided) {
         std::cerr << "Error: No interface specified!" << std::endl;
         return 1;
@@ -167,8 +195,14 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    bool use_ipv6 = isIPv6(config.target);
-    std::cout << "Using " << (use_ipv6 ? "IPv6" : "IPv4") << " for scanning.\n";
+    bool use_ipv6 = false;
+    std::string resolvedIP = config.target;
+
+    if (!resolveHostname(config.target, resolvedIP, use_ipv6)) {
+        return 1;
+    }
+
+    std::cout << "Resolved IP: " << resolvedIP << " (" << (use_ipv6 ? "IPv6" : "IPv4") << ")\n";
     
     if (!ports_specified) {
         std::cerr << "Error: No ports specified!" << std::endl;
@@ -180,7 +214,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    std::cout << "Scanning target: " << config.target << " on interface: " << config.interface << std::endl;
+    std::cout << "Scanning target: " << resolvedIP << " on interface: " << config.interface << std::endl;
     std::cout << "TCP Ports: ";
     for (int port : config.tcp_ports) std::cout << port << " ";
     std::cout << "\nUDP Ports: ";
@@ -188,7 +222,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\nTimeout: " << config.timeout << "ms" << std::endl;
 
     if (!config.tcp_ports.empty()) {
-        scanTcpPorts(config);
+        scanTcpPorts(config /*use_ipv6*/);
     }
 
     return 0;
