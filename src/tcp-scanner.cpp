@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
+#include <netinet/ip6.h>
 #include <netinet/ip_icmp.h> 
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -31,54 +32,67 @@ unsigned short checksum(void *b, int len) {
     return (unsigned short)(~sum);
 }
 
-void sendSynPacket(int sock, const ScanConfig &config, int port) {
-    struct sockaddr_in target;
-    target.sin_family = AF_INET;
-    target.sin_port = htons(port);
-    inet_pton(AF_INET, config.target.c_str(), &target.sin_addr);
+void sendSynPacket(int sock, const ScanConfig &config, const std::string &resolvedIP, bool use_ipv6, int port) {
+    if (use_ipv6) {
+        struct sockaddr_in6 target6{};
+        target6.sin6_family = AF_INET6;
+        target6.sin6_port = htons(port);
+        inet_pton(AF_INET6, resolvedIP.c_str(), &target6.sin6_addr);
 
-    char packet[sizeof(struct ip) + sizeof(struct tcphdr)];
-    memset(packet, 0, sizeof(packet));
+        char packet[sizeof(struct ip6_hdr) + sizeof(struct tcphdr)];
+        memset(packet, 0, sizeof(packet));
 
-    struct ip *iph = (struct ip *)packet;
-    struct tcphdr *tcph = (struct tcphdr *)(packet + sizeof(struct ip));
+        struct ip6_hdr *ip6h = (struct ip6_hdr *)packet;
+        struct tcphdr *tcph = (struct tcphdr *)(packet + sizeof(struct ip6_hdr));
 
-    iph->ip_hl = 5;
-    iph->ip_v = 4;
-    iph->ip_ttl = 64;
-    iph->ip_p = IPPROTO_TCP;
-    iph->ip_src.s_addr = inet_addr(config.target.c_str());
-    iph->ip_dst = target.sin_addr;
-    iph->ip_sum = 0;
-    iph->ip_sum = checksum((unsigned short *)iph, sizeof(struct ip));
+        ip6h->ip6_flow = 0;
+        ip6h->ip6_vfc = 6 << 4;
+        ip6h->ip6_plen = htons(sizeof(struct tcphdr));
+        ip6h->ip6_nxt = IPPROTO_TCP;
+        ip6h->ip6_hlim = 64;
+        inet_pton(AF_INET6, "::1", &ip6h->ip6_src); // Використовуємо loopback для тесту
+        inet_pton(AF_INET6, resolvedIP.c_str(), &ip6h->ip6_dst);
 
-    //srand(time(NULL)); 
-    //int source_port = 1024 + (rand() % 64511); 
+        tcph->th_dport = htons(port);
+        tcph->th_flags = TH_SYN;
+        tcph->th_off = 5;
+        tcph->th_sum = 0;
 
-    //tcph->th_sport = htons(source_port);
-    tcph->th_dport = htons(port);
-    tcph->th_flags = TH_SYN;
-    tcph->th_off = 5;
-    tcph->th_sum = 0;
-
-    struct pseudo_header psh;
-    psh.src = iph->ip_src.s_addr;
-    psh.dst = iph->ip_dst.s_addr;
-    psh.reserved = 0;
-    psh.protocol = IPPROTO_TCP;
-    psh.length = htons(sizeof(struct tcphdr));
-
-    char pseudo_packet[sizeof(struct pseudo_header) + sizeof(struct tcphdr)];
-    memcpy(pseudo_packet, &psh, sizeof(struct pseudo_header));
-    memcpy(pseudo_packet + sizeof(struct pseudo_header), tcph, sizeof(struct tcphdr));
-
-    tcph->th_sum = checksum((unsigned short *)pseudo_packet, sizeof(pseudo_packet));
-
-    if (sendto(sock, packet, sizeof(packet), 0, (struct sockaddr *)&target, sizeof(target)) < 0) {
-        perror("Error sending SYN packet");
+        if (sendto(sock, packet, sizeof(packet), 0, (struct sockaddr *)&target6, sizeof(target6)) < 0) {
+            perror("Error sending SYN packet (IPv6)");
+        } else {
+            std::cout << "Sent SYN to port " << port << " on target " << resolvedIP << " (IPv6)" << std::endl;
+        }
     } else {
-        std::cout << "Sent SYN to port " << port << " from " << config.target << std::endl;
-                 // << " with source port " << source_port 
+        struct sockaddr_in target{};
+        target.sin_family = AF_INET;
+        target.sin_port = htons(port);
+        inet_pton(AF_INET, resolvedIP.c_str(), &target.sin_addr);
+
+        char packet[sizeof(struct ip) + sizeof(struct tcphdr)];
+        memset(packet, 0, sizeof(packet));
+
+        struct ip *iph = (struct ip *)packet;
+        struct tcphdr *tcph = (struct tcphdr *)(packet + sizeof(struct ip));
+
+        iph->ip_hl = 5;
+        iph->ip_v = 4;
+        iph->ip_ttl = 64;
+        iph->ip_p = IPPROTO_TCP;
+        iph->ip_src.s_addr = inet_addr(config.target.c_str());
+        iph->ip_dst = target.sin_addr;
+        iph->ip_sum = checksum((unsigned short *)iph, sizeof(struct ip));
+
+        tcph->th_dport = htons(port);
+        tcph->th_flags = TH_SYN;
+        tcph->th_off = 5;
+        tcph->th_sum = 0;
+
+        if (sendto(sock, packet, sizeof(packet), 0, (struct sockaddr *)&target, sizeof(target)) < 0) {
+            perror("Error sending SYN packet (IPv4)");
+        } else {
+            std::cout << "Sent SYN to port " << port << " on target " << resolvedIP << " (IPv4)" << std::endl;
+        }
     }
 }
 
@@ -130,8 +144,8 @@ std::string receiveResponse(const ScanConfig &config, int /*target_port*/) {
     return "filtered";  // If there is no response
 }
 
-void scanTcpPorts(const ScanConfig &config) {
-    int sock = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+void scanTcpPorts(const ScanConfig &config, const std::string &resolvedIP, bool use_ipv6) {
+    int sock = socket(use_ipv6 ? AF_INET6 : AF_INET, SOCK_RAW, IPPROTO_TCP);
     if (sock < 0) {
         perror("Error creating raw socket");
         return;
@@ -140,7 +154,7 @@ void scanTcpPorts(const ScanConfig &config) {
     std::cout << "PORT STATE\n";
 
     for (int port : config.tcp_ports) {
-        sendSynPacket(sock, config, port);
+        sendSynPacket(sock, config, resolvedIP, use_ipv6, port);
         std::string result = receiveResponse(config, port);
         std::cout << port << "/tcp " << result << std::endl;
         usleep(config.timeout * 1000);
