@@ -221,5 +221,9 @@ int main(int argc, char* argv[]) {
         scanTcpPorts(config, resolvedIP, use_ipv6);
     }
 
+    if (!config.udp_ports.empty()) {
+        scanUdpPorts(config, resolvedIP, use_ipv6);
+    }
+
     return 0;
 }

@@ -3,7 +3,7 @@ CXXFLAGS = -std=c++17 -Wall -Wextra -pedantic
 LDFLAGS = -lpcap
 
 TARGET = ipk-l4-scan
-SOURCES = ipk-l4-scan.cpp tcp-scanner.cpp
+SOURCES = ipk-l4-scan.cpp tcp-scanner.cpp udp-scanner.cpp
 OBJECTS = $(SOURCES:.cpp=.o)
 
 all: $(TARGET)
